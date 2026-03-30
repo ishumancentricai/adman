@@ -1,0 +1,7 @@
+# TASK
+Create the advertisement image described below, using the provided reference image to accurately depict the {PRODUCT_NAME}.
+
+# Technical Requirements
+* Embed the {PRODUCT_NAME} from the reference image into the described scene
+* No text, logos, or graphical elements except those naturally present in the scene or on the product
+* Photorealistic style with commercial photography quality

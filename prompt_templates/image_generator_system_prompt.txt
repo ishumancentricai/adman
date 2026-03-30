@@ -1,0 +1,10 @@
+# Task
+
+Generate a photorealistic {PRODUCT_TYPE} advertisement image featuring the '{PRODUCT_NAME}'.
+Use the provided reference image of the '{PRODUCT_NAME}' to ensure the product is accurately embedded in the image.
+
+
+# Technical Direction
+
+* If no further context is specified, render the {PRODUCT_NAME} in a clean white studio setting.
+* No text, logos, or graphical elements should appear in the image, except for those naturally present on the product itself.

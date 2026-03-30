@@ -1,0 +1,14 @@
+pandas
+ipykernel
+jupyterlab
+openai
+Pillow
+requests
+python-dotenv
+ollama
+lmstudio
+tiktoken
+numpy
+tqdm
+PyYAML
+matplotlib

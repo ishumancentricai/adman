@@ -1,0 +1,17 @@
+# TASK
+
+Generate a concise image generation prompt for a social media advertisement featuring the {PRODUCT_NAME} (a {PRODUCT_TYPE}). A reference image of the product will be provided to the image generator; focus your prompt on scene context, human subjects, and atmosphere that aligns with the target persona.
+
+# TARGET PERSONA
+
+The advertisement should appeal to the following persona:
+
+<persona_description>
+{persona_description}
+</persona_description>
+
+# REQUIREMENTS
+
+* Focus on the most visually relevant persona details
+* Focus on elements that can be depicted photographically
+* Create a clean product-focused scene appropriate to the {PRODUCT_TYPE}

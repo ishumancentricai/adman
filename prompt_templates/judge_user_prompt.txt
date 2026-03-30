@@ -1,0 +1,16 @@
+# TASK
+
+Systematically analyze the provided image to identify anomalies, anatomical errors, and physically impossible elements. Complete both steps sequentially.
+
+## Step 1: Detailed Inventory
+* Create a comprehensive catalog of all image elements (people and objects).
+* List each distinct object
+* Note its location and condition
+* Describe exactly what you see, avoiding vague terms like "appears to be" or "seems like"
+
+
+## Step 2: Anomaly Detection
+Cross-reference the inventory with the image. Anomalies can include, but are not limited to:
+- Anatomical errors
+- Physical impossibilities
+- Merged or blended objects

@@ -1,0 +1,27 @@
+# Task
+
+Generate a prompt for an advertisement image featuring the '{PRODUCT_NAME}' ({PRODUCT_TYPE_1}).
+
+The image should appeal to the following persona:
+
+<persona_description>
+{persona_description}
+</persona_description>
+
+
+# Conditions for Depicting Humans
+
+Apply the appropriate level based on the persona description provided:
+
+* Level 1: Do not depict humans if only basic demographic details are provided (e.g., age, gender, birthplace, current location).
+* Level 2: If information about ethnicity, environment, or occupation is provided in addition to the basic demographics, depict humans in partial view without showing the face (e.g., ethnicity, housing type, climate, job role).
+* Level 3: If detailed information about appearance, lifestyle, family life cycle, or pets is provided in addition to Level 2 details, depict humans in full, including the face (e.g., hairstyle, facial hair, clothing style, family status, pets, hobbies).
+
+
+# Technical Direction
+
+* Do not invent or assume any specific details; use only the information provided in the persona description.
+* Choose for the image only those persona details that are relevant to the typical consumer context of the {PRODUCT_TYPE_2} and that can be expressed as context-appropriate visual cues.
+* Do not describe the product’s visual properties (e.g., color, shape, material); these should come from the reference image.
+* No additional text or logos should appear in the image, except for text on the product itself or naturally occurring text within the environment.
+* Do not define or constrain the image aspect ratio.

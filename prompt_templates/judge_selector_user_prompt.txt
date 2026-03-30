@@ -1,0 +1,6 @@
+# TASK
+
+You are presented with {VERSION_LIMIT} generated {PRODUCT_TYPE} advertisements for the '{PRODUCT_NAME}'. 
+Evaluate these AI-generated advertisement images for quality defects and anomalies.
+
+Identify which version has the highest quality for commercial publishing.
