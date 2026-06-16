@@ -11,12 +11,22 @@
 
 import pandas as pd
 import os
-from config import DATA_DIR, CLEANED_CUSTOMER_DATA_FILE, CUSTOMER_DIR, CUSTOMER_DATA_FILE
+from src.dynamic_config import DynamicConfig
 
 
-def clean_data(customer_dir=CUSTOMER_DIR,
-               customer_data_file=CUSTOMER_DATA_FILE,
-               cleaned_customer_data_file=CLEANED_CUSTOMER_DATA_FILE) -> pd.DataFrame:
+def clean_data(
+    config: DynamicConfig | None = None,
+    customer_dir=None,
+    customer_data_file=None,
+    cleaned_customer_data_file=None,
+) -> pd.DataFrame:
+    config = config or DynamicConfig()
+    customer_dir = customer_dir or config.CUSTOMER_DIR
+    customer_data_file = customer_data_file or config.CUSTOMER_DATA_FILE
+    cleaned_customer_data_file = (
+        cleaned_customer_data_file or config.CLEANED_CUSTOMER_DATA_FILE
+    )
+
     base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     input_path = os.path.join(base_path, customer_dir, customer_data_file)
     output_path = os.path.join(base_path, customer_dir, cleaned_customer_data_file)
@@ -64,7 +74,7 @@ def clean_data(customer_dir=CUSTOMER_DIR,
     cleaned = df.loc[both_ok].copy()
 
     # Ensure output directory exists
-    os.makedirs(os.path.join(base_path, DATA_DIR), exist_ok=True)
+    os.makedirs(os.path.join(base_path, config.DATA_DIR), exist_ok=True)
 
     # Save to CSV
     cleaned.to_csv(output_path, index=False)

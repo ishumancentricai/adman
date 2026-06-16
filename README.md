@@ -3,10 +3,22 @@
 This project explores how Generative AI can be used to create personalized advertisement imagery based on user consumer data.
 
 ## Note on API Keys
-To run the pipeline, you will need an OpenAI API key. You can set this up in a `.env` file in the root of the project. The .env file should contain the following line:
+To run the pipeline with OpenAI, set an OpenAI API key in a `.env` file in the root of the project:
 
 ```
 OPENAI_API_KEY=your_openai_api_key_here
+```
+
+To run the pipeline with Google Gemini / Nano Banana, set either:
+
+```
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+or:
+
+```
+GOOGLE_API_KEY=your_google_api_key_here
 ```
 
 Note that the .env file is not tracked.
@@ -39,13 +51,21 @@ pip install -r requirements.txt
 
 ### Run the pipeline on the included celebrity demo data
 
-1. Ensure your OpenAI API key is available (e.g. via `.env`).
-2. Set the batch parameter in the 01_pipeline.py to a small number (e.g. `batch_size = 2`) to test with the included celebrity demo data. The pipeline is designed to run in batches, so you can adjust this parameter to control how many personas are processed in one go. It will continue from where it left off if you stop and restart it, so you can run it in multiple batches if desired.
+1. Ensure your provider API key is available (e.g. via `.env`).
+2. Choose a provider. `openai` uses GPT + `gpt-image-1`; `google` uses Gemini + Nano Banana.
 3. Run:
 
 ```bash
-python 01_pipeline.py
+python 01_pipeline.py --provider openai --badge-size 2
 ```
+
+or:
+
+```bash
+python 01_pipeline.py --provider google --badge-size 2
+```
+
+Outputs are separated by provider under `data/openai/...` or `data/google/...`.
 
 4. Optionally, you can run the evaluation and aggregation scripts, but note that they are designed for participant data and may not work as intended with the celebrity demo data.
 

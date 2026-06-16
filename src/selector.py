@@ -1,26 +1,10 @@
 import os
 import json
-from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from config import (
-    CUSTOMER,
-    VERSION_LIMIT,
-    SELECTED_LEVEL_ID,
-    SELECTED_PRODUCT_ID,
-    OPENAI_MODEL,
-    OPENAI_EFFORT,
-    OPENAI_VERBOSITY,
-    OPENAI_SUMMARY,
-    PROMPT_TEMPLATES_DIR,
-    JUDGEMENTS_DIR,
-    SELECTED_LEVEL_ID,
-    SELECTED_PRODUCT_ID,
-    SELECTOR_SYS_PROMPT_FILE,
-    SELECTOR_USER_PROMPT_FILE,
-)
-from utils import logger, load_prompt, get_openai_resp
+from src.dynamic_config import DynamicConfig
+from utils import load_prompt, get_openai_resp
 
 
 def _normalize_comparison(data: dict) -> dict:
@@ -55,11 +39,13 @@ def ask_openai(
     system_prompt: str,
     user_prompt: str,
     *judgements,
+    config: DynamicConfig | None = None,
 ) -> tuple[str, str, dict]:
+    config = config or DynamicConfig()
     load_dotenv()
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     req = {
-        "model": OPENAI_MODEL,
+        "model": config.OPENAI_MODEL,
         "input": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": [
@@ -67,26 +53,31 @@ def ask_openai(
                 {"type": "input_text", "text": "\n\n".join(f"# judgement {i}\n{v}\n\n" for i, v in enumerate(judgements))},
             ]},
         ],
-        "reasoning": {"effort": OPENAI_EFFORT, "summary": OPENAI_SUMMARY},
-        "text": {"verbosity": OPENAI_VERBOSITY}
+        "reasoning": {
+            "effort": config.OPENAI_EFFORT,
+            "summary": config.OPENAI_SUMMARY,
+        },
+        "text": {"verbosity": config.OPENAI_VERBOSITY}
     }
     return get_openai_resp(client, req)
 
 
-def compare_versions():
+def compare_versions(config: DynamicConfig | None = None):
+    config = config or DynamicConfig()
+
     # Load system prompt template
-    system_prompt_path = PROMPT_TEMPLATES_DIR / SELECTOR_SYS_PROMPT_FILE
+    system_prompt_path = config.PROMPT_TEMPLATES_DIR / config.SELECTOR_SYS_PROMPT_FILE
     system_prompt = load_prompt(system_prompt_path)
     # Load user prompt template
-    user_prompt_path = PROMPT_TEMPLATES_DIR / SELECTOR_USER_PROMPT_FILE
+    user_prompt_path = config.PROMPT_TEMPLATES_DIR / config.SELECTOR_USER_PROMPT_FILE
     user_prompt = load_prompt(user_prompt_path)
 
     # Load judgements
     judgements = []
-    for v in range(VERSION_LIMIT):
+    for v in config.VERSION_IDS:
         judgement_path = (
-            JUDGEMENTS_DIR /
-            f"{CUSTOMER}_P{SELECTED_PRODUCT_ID}_L{SELECTED_LEVEL_ID}_v{v}_judgement.json"
+            config.JUDGEMENTS_DIR /
+            f"{config.CUSTOMER}_P{config.SELECTED_PRODUCT_ID}_L{config.SELECTED_LEVEL_ID}_v{v}_judgement.json"
         )
         # Double JSON might be unnecessary - keep for consistent formatting
         with open(judgement_path, "r", encoding="utf-8") as f:
@@ -99,12 +90,13 @@ def compare_versions():
         system_prompt,
         user_prompt,
         *judgements,
+        config=config,
     )
 
     # Save comparison output
     comparison_path = (
-        JUDGEMENTS_DIR /
-        f"{CUSTOMER}_P{SELECTED_PRODUCT_ID}_L{SELECTED_LEVEL_ID}_version_comparison.json"
+        config.JUDGEMENTS_DIR /
+        f"{config.CUSTOMER}_P{config.SELECTED_PRODUCT_ID}_L{config.SELECTED_LEVEL_ID}_version_comparison.json"
     )
     try:
         comparison_json = json.loads(output_text)
@@ -117,24 +109,25 @@ def compare_versions():
         f.write(json.dumps(comparison_json, indent=4, ensure_ascii=False))
     # Save reasoning
     comparison_reasoning_path = (
-        JUDGEMENTS_DIR /
-        f"{CUSTOMER}_P{SELECTED_PRODUCT_ID}_L{SELECTED_LEVEL_ID}_version_comparison_reasoning.txt"
+        config.JUDGEMENTS_DIR /
+        f"{config.CUSTOMER}_P{config.SELECTED_PRODUCT_ID}_L{config.SELECTED_LEVEL_ID}_version_comparison_reasoning.txt"
     )
     with open(comparison_reasoning_path, "w", encoding="utf-8") as f:
         f.write(reasoning.strip())
     # Save full response
     resp_path = (
-        JUDGEMENTS_DIR /
-        f"{CUSTOMER}_P{SELECTED_PRODUCT_ID}_L{SELECTED_LEVEL_ID}_version_comparison_response.json"
+        config.JUDGEMENTS_DIR /
+        f"{config.CUSTOMER}_P{config.SELECTED_PRODUCT_ID}_L{config.SELECTED_LEVEL_ID}_version_comparison_response.json"
     )
     with open(resp_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(_resp_dict, indent=4))
 
 
-def get_best_version() -> tuple[int, str]:
+def get_best_version(config: DynamicConfig | None = None) -> tuple[int, str]:
+    config = config or DynamicConfig()
     comparison_file_path = (
-        JUDGEMENTS_DIR /
-        f"{CUSTOMER}_P{SELECTED_PRODUCT_ID}_L{SELECTED_LEVEL_ID}_version_comparison.json"
+        config.JUDGEMENTS_DIR /
+        f"{config.CUSTOMER}_P{config.SELECTED_PRODUCT_ID}_L{config.SELECTED_LEVEL_ID}_version_comparison.json"
     )
     with open(comparison_file_path, "r", encoding="utf-8") as f:
         content = json.load(f)

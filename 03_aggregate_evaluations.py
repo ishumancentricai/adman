@@ -13,18 +13,23 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 
 # === CONFIGURATION ===
+REVIEWER_NAME_1 = "LM"
+REVIEWER_NAME_2 = "VKR"
+#REVIEWER_NAME_3 = "AM"
+
 BASE_PATH = Path(__file__).parent.resolve()
 DATA_DIR = BASE_PATH / "data"
+PROVIDER = "google"  # "openai" or "google"
 
 # List of CSV files to aggregate
 # Adjust this list as needed
 INPUT_FILES = [
-    DATA_DIR / "image_evaluation_paper_rev_1.csv",
-    DATA_DIR / "image_evaluation_paper_rev_2.csv",
-    DATA_DIR / "image_evaluation_paper_rev_3.csv"
+    DATA_DIR / f"{PROVIDER}_{REVIEWER_NAME_1}_image_evaluation.csv",
+    DATA_DIR / f"{PROVIDER}_{REVIEWER_NAME_2}_image_evaluation.csv",
+    #DATA_DIR / f"{PROVIDER}_{REVIEWER_NAME_3}_image_evaluation.csv"
 ]
 
-OUTPUT_CSV = DATA_DIR / "image_evaluation_aggregated.csv"
+OUTPUT_CSV = DATA_DIR / f"{PROVIDER}_aggregated_evaluation.csv"
 
 
 def load_data(file_paths):

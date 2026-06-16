@@ -3,9 +3,7 @@ import sys
 import base64
 from pathlib import Path
 
-from config import (
-    PRODUCTS,
-)
+from src.dynamic_config import DynamicConfig
 
 # === LOGGER ===
 logger = logging.getLogger('app')
@@ -26,11 +24,12 @@ def load_prompt(prompt_path: str) -> str:
     return txt
 
 
-def product_by_id(prod_id: int) -> dict:
-    for product in PRODUCTS.values():
+def product_by_id(prod_id: int, products: dict | None = None) -> dict:
+    products = products or DynamicConfig.PRODUCTS
+    for product in products.values():
         if product["id"] == prod_id:
             return product
-    raise ValueError(f"Product ID {prod_id} not found in PRODUCTS.")
+    raise ValueError(f"Product ID {prod_id} not found in products.")
 
 
 def load_and_encode_image_b64(image_path: str) -> str:

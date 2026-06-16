@@ -1,16 +1,34 @@
 from src.dynamic_config import DynamicConfig
+import argparse
 import pandas as pd
 import os
+import re
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
 import base64
+from PIL import Image
 from utils import logger, load_prompt, product_by_id, get_openai_resp, load_and_encode_image_b64
 import time
 
+try:
+    from google import genai
+    from google.genai import errors as google_errors
+    from google.genai import types as google_types
+    import httpx
+except ImportError:
+    genai = None
+    google_errors = None
+    google_types = None
+    httpx = None
+
 DYN_CONF = DynamicConfig()
 
-PARTICIPANT_DATA_DF = pd.read_csv("data/participants.csv", sep="\t", quotechar='"')
+PARTICIPANT_DATA_DF = pd.read_csv(
+    DYN_CONF.PARTICIPANT_DATA_FILE,
+    sep="\t",
+    quotechar='"',
+)
 
 # === DESCRIPTION_COMPOSITION ===
 DESCRIPTION_COMPOSITION = [
@@ -274,6 +292,299 @@ def clean_data(DYNAMIC_CONFIG,
     return cleaned
 
 
+def _require_google_client(DYNAMIC_CONFIG):
+    if genai is None or google_types is None:
+        raise ImportError(
+            "Google provider requires the 'google-genai' package. "
+            "Install it with: pip install google-genai"
+        )
+
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "Google provider requires GEMINI_API_KEY or GOOGLE_API_KEY in the environment."
+        )
+    return genai.Client(
+        api_key=api_key,
+        http_options=google_types.HttpOptions(timeout=DYNAMIC_CONFIG.GOOGLE_TIMEOUT_MS),
+    )
+
+
+def _google_response_dict(response) -> dict:
+    if hasattr(response, "model_dump"):
+        return response.model_dump()
+    if hasattr(response, "to_json_dict"):
+        return response.to_json_dict()
+    return {"text": getattr(response, "text", None)}
+
+
+def _json_safe(value):
+    if isinstance(value, bytes):
+        return f"<bytes:{len(value)}>"
+    if isinstance(value, dict):
+        return {key: _json_safe(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _dump_json_safe(value, indent: int = 4) -> str:
+    return json.dumps(_json_safe(value), indent=indent)
+
+
+def _parse_model_json(output_text: str) -> dict:
+    text = output_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                data, _ = decoder.raw_decode(text[index:])
+                break
+            except json.JSONDecodeError:
+                continue
+        else:
+            preview = text[:500] if text else "<empty response>"
+            raise ValueError(f"No JSON object found in model output: {preview}")
+
+    if not isinstance(data, dict):
+        raise ValueError("model JSON output is not a dictionary.")
+    return data
+
+
+def _google_text_response(response) -> tuple[str, str, dict]:
+    output_text = getattr(response, "text", None)
+    if not output_text:
+        raise ValueError("Google API response missing text output.")
+    return output_text.strip(), "", _google_response_dict(response)
+
+
+def _google_image_part(image_b64: str):
+    return google_types.Part.from_bytes(
+        data=base64.b64decode(image_b64),
+        mime_type="image/png",
+    )
+
+
+def _google_thinking_config(DYNAMIC_CONFIG):
+    if not DYNAMIC_CONFIG.GOOGLE_THINKING_ENABLED:
+        return None
+
+    effort = DYNAMIC_CONFIG.GOOGLE_THINKING_EFFORT.upper()
+    try:
+        thinking_level = getattr(google_types.ThinkingLevel, effort)
+    except AttributeError as exc:
+        raise ValueError(
+            "GOOGLE_THINKING_EFFORT must be one of: "
+            "minimal, low, medium, high"
+        ) from exc
+
+    return google_types.ThinkingConfig(
+        include_thoughts=True,
+        thinking_level=thinking_level,
+    )
+
+
+def _google_generate_config(DYNAMIC_CONFIG, system_prompt: str):
+    return google_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        thinking_config=_google_thinking_config(DYNAMIC_CONFIG),
+    )
+
+
+def _is_retryable_google_error(exc: Exception) -> bool:
+    if httpx is not None and isinstance(exc, httpx.TimeoutException):
+        return True
+
+    if google_errors is not None and isinstance(exc, google_errors.APIError):
+        status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        return status_code in {429, 500, 502, 503, 504}
+
+    return False
+
+
+def _google_retry_after_seconds(exc: Exception) -> float | None:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+
+    retry_after = headers.get("retry-after")
+    if retry_after is None:
+        return None
+
+    try:
+        return float(retry_after)
+    except ValueError:
+        return None
+
+
+def _google_generate_content(client, DYNAMIC_CONFIG, **kwargs):
+    attempts = DYNAMIC_CONFIG.GOOGLE_RETRY_ATTEMPTS
+    initial_delay = DYNAMIC_CONFIG.GOOGLE_RETRY_INITIAL_DELAY_SECONDS
+    max_delay = DYNAMIC_CONFIG.GOOGLE_RETRY_MAX_DELAY_SECONDS
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.models.generate_content(**kwargs)
+        except Exception as exc:
+            if attempt >= attempts or not _is_retryable_google_error(exc):
+                raise
+
+            retry_after = _google_retry_after_seconds(exc)
+            delay = retry_after or min(max_delay, initial_delay * (2 ** (attempt - 1)))
+            logger.warning(
+                "Google API call failed with a retryable error "
+                f"({type(exc).__name__}: {exc}). "
+                f"Retrying in {delay:.0f}s ({attempt}/{attempts})."
+            )
+            time.sleep(delay)
+
+    raise RuntimeError("Google API retry loop exited unexpectedly.")
+
+
+def ask_text_model(system_prompt, user_prompt, DYNAMIC_CONFIG) -> tuple[str, str, dict]:
+    if DYNAMIC_CONFIG.PROVIDER == "google":
+        client = _require_google_client(DYNAMIC_CONFIG)
+        response = _google_generate_content(
+            client,
+            DYNAMIC_CONFIG,
+            model=DYNAMIC_CONFIG.GOOGLE_TEXT_MODEL,
+            contents=user_prompt,
+            config=_google_generate_config(DYNAMIC_CONFIG, system_prompt),
+        )
+        return _google_text_response(response)
+
+    return ask_openai_3(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        DYNAMIC_CONFIG=DYNAMIC_CONFIG,
+    )
+
+
+def ask_text_model_with_judgements(
+    system_prompt: str,
+    user_prompt: str,
+    *judgements,
+    DYNAMIC_CONFIG,
+) -> tuple[str, str, dict]:
+    if DYNAMIC_CONFIG.PROVIDER == "google":
+        client = _require_google_client(DYNAMIC_CONFIG)
+        joined_judgements = "\n\n".join(
+            f"# judgement {i}\n{v}\n\n" for i, v in enumerate(judgements)
+        )
+        response = _google_generate_content(
+            client,
+            DYNAMIC_CONFIG,
+            model=DYNAMIC_CONFIG.GOOGLE_TEXT_MODEL,
+            contents=[user_prompt, joined_judgements],
+            config=_google_generate_config(DYNAMIC_CONFIG, system_prompt),
+        )
+        return _google_text_response(response)
+
+    return ask_openai_2(
+        system_prompt,
+        user_prompt,
+        *judgements,
+        DYNAMIC_CONFIG=DYNAMIC_CONFIG,
+    )
+
+
+def ask_judge_model(
+    system_prompt: str,
+    user_prompt: str,
+    image_generation_prompt: str,
+    reference_image: str,
+    generated_image: str,
+    DYNAMIC_CONFIG,
+):
+    if DYNAMIC_CONFIG.PROVIDER == "google":
+        client = _require_google_client(DYNAMIC_CONFIG)
+        response = _google_generate_content(
+            client,
+            DYNAMIC_CONFIG,
+            model=DYNAMIC_CONFIG.GOOGLE_TEXT_MODEL,
+            contents=[
+                user_prompt,
+                image_generation_prompt,
+                _google_image_part(reference_image),
+                _google_image_part(generated_image),
+            ],
+            config=_google_generate_config(DYNAMIC_CONFIG, system_prompt),
+        )
+        return _google_text_response(response)
+
+    return ask_openai_4(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        image_generation_prompt=image_generation_prompt,
+        reference_image=reference_image,
+        generated_image=generated_image,
+        DYNAMIC_CONFIG=DYNAMIC_CONFIG,
+    )
+
+
+def ask_image_model(prompt: str, ref_image_path, DYNAMIC_CONFIG) -> bytes:
+    if DYNAMIC_CONFIG.PROVIDER == "google":
+        client = _require_google_client(DYNAMIC_CONFIG)
+        logger.info(
+            "Calling Google image model "
+            f"{DYNAMIC_CONFIG.GOOGLE_IMAGE_MODEL} "
+            f"({DYNAMIC_CONFIG.GOOGLE_IMAGE_ASPECT_RATIO}, "
+            f"{DYNAMIC_CONFIG.GOOGLE_IMAGE_SIZE}); this can take a few minutes"
+        )
+        t0 = time.time()
+        with Image.open(ref_image_path) as ref_image:
+            response = _google_generate_content(
+                client,
+                DYNAMIC_CONFIG,
+                model=DYNAMIC_CONFIG.GOOGLE_IMAGE_MODEL,
+                contents=[prompt, ref_image],
+                config=google_types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"],
+                    image_config=google_types.ImageConfig(
+                        aspect_ratio=DYNAMIC_CONFIG.GOOGLE_IMAGE_ASPECT_RATIO,
+                        image_size=DYNAMIC_CONFIG.GOOGLE_IMAGE_SIZE,
+                    ),
+                ),
+            )
+        logger.info(
+            "Google image model returned in "
+            f"{time.time() - t0:.2f} seconds"
+        )
+
+        for part in response.parts or []:
+            if part.text is not None:
+                logger.info(f"Google image model text response: {part.text.strip()}")
+                continue
+            inline_data = getattr(part, "inline_data", None)
+            if inline_data and inline_data.data:
+                data = inline_data.data
+                if isinstance(data, str):
+                    return base64.b64decode(data)
+                return data
+            image = part.as_image()
+            if image is not None and image.image_bytes:
+                return image.image_bytes
+        raise ValueError("Google image response did not include image bytes.")
+
+    return ask_openai(
+        prompt=prompt,
+        ref_image_path=ref_image_path,
+        DYNAMIC_CONFIG=DYNAMIC_CONFIG,
+    )
+
+
 def ask_openai_3(system_prompt, user_prompt, DYNAMIC_CONFIG) -> tuple[str, str, dict]:
     load_dotenv()
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -321,7 +632,7 @@ def generate_prompt(version: int, DYNAMIC_CONFIG) -> None:
     with open(prompt_generator_log_path, "w", encoding="utf-8") as f:
         f.write(log_prompt.strip())
 
-    output_text, reasoning, _resp_dict = ask_openai_3(
+    output_text, reasoning, _resp_dict = ask_text_model(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         DYNAMIC_CONFIG=DYNAMIC_CONFIG
@@ -347,7 +658,7 @@ def generate_prompt(version: int, DYNAMIC_CONFIG) -> None:
         f"{DYNAMIC_CONFIG.CUSTOMER}_P{DYNAMIC_CONFIG.SELECTED_PRODUCT_ID}_L{DYNAMIC_CONFIG.SELECTED_LEVEL_ID}_v{version}_prompt_resp.json"
     )
     with open(resp_file_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(_resp_dict, indent=4))
+        f.write(_dump_json_safe(_resp_dict, indent=4))
 
 
 def _normalize_comparison(data: dict) -> dict:
@@ -411,7 +722,7 @@ def compare_versions(DYNAMIC_CONFIG) -> None:
 
     # Load judgements
     judgements = []
-    for v in range(DYNAMIC_CONFIG.VERSION_LIMIT):
+    for v in DYNAMIC_CONFIG.VERSION_IDS:
         judgement_path = (
             DYNAMIC_CONFIG.JUDGEMENTS_DIR /
             f"{DYNAMIC_CONFIG.CUSTOMER}_P{DYNAMIC_CONFIG.SELECTED_PRODUCT_ID}_L{DYNAMIC_CONFIG.SELECTED_LEVEL_ID}_v{v}_judgement.json"
@@ -423,7 +734,7 @@ def compare_versions(DYNAMIC_CONFIG) -> None:
             raise ValueError(f"Invalid judgement format in {judgement_path}")
         judgements.append(json.dumps(judgement))
 
-    output_text, reasoning, _resp_dict = ask_openai_2(
+    output_text, reasoning, _resp_dict = ask_text_model_with_judgements(
         system_prompt,
         user_prompt,
         *judgements,
@@ -436,11 +747,12 @@ def compare_versions(DYNAMIC_CONFIG) -> None:
         f"{DYNAMIC_CONFIG.CUSTOMER}_P{DYNAMIC_CONFIG.SELECTED_PRODUCT_ID}_L{DYNAMIC_CONFIG.SELECTED_LEVEL_ID}_version_comparison.json"
     )
     try:
-        comparison_json = json.loads(output_text)
-        if not isinstance(comparison_json, dict):
-            raise ValueError("Comparison output is not a dictionary.")
+        comparison_json = _parse_model_json(output_text)
         comparison_json = _normalize_comparison(comparison_json)
     except Exception as e:
+        raw_comparison_path = comparison_path.with_suffix(".raw.txt")
+        with open(raw_comparison_path, "w", encoding="utf-8") as f:
+            f.write(output_text)
         raise ValueError(f"Failed to parse comparison output as JSON: {e}")
     with open(comparison_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(comparison_json, indent=4, ensure_ascii=False))
@@ -457,7 +769,7 @@ def compare_versions(DYNAMIC_CONFIG) -> None:
         f"{DYNAMIC_CONFIG.CUSTOMER}_P{DYNAMIC_CONFIG.SELECTED_PRODUCT_ID}_L{DYNAMIC_CONFIG.SELECTED_LEVEL_ID}_version_comparison_response.json"
     )
     with open(resp_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(_resp_dict, indent=4))
+        f.write(_dump_json_safe(_resp_dict, indent=4))
 
 
 def get_best_version(DYNAMIC_CONFIG) -> tuple[int, str]:
@@ -541,7 +853,7 @@ def generate_image(version, DYNAMIC_CONFIG) -> None:
     )
 
     # Generate image
-    image_bytes = ask_openai(
+    image_bytes = ask_image_model(
         prompt=full_prompt,
         ref_image_path=reference_image_path,
         DYNAMIC_CONFIG=DYNAMIC_CONFIG
@@ -691,7 +1003,7 @@ def judge(version: int, DYNAMIC_CONFIG) -> None:
     generated_image = load_and_encode_image_b64(generated_image_path)
 
     # Generate judgement
-    output_text, reasoning, _resp_dict = ask_openai_4(
+    output_text, reasoning, _resp_dict = ask_judge_model(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         image_generation_prompt=image_generation_prompt,
@@ -706,11 +1018,12 @@ def judge(version: int, DYNAMIC_CONFIG) -> None:
         f"{DYNAMIC_CONFIG.CUSTOMER}_P{DYNAMIC_CONFIG.SELECTED_PRODUCT_ID}_L{DYNAMIC_CONFIG.SELECTED_LEVEL_ID}_v{version}_judgement.json"
     )
     try:
-        judgement_json = json.loads(output_text)
-        if not isinstance(judgement_json, dict):
-            raise ValueError("judgement output is not a dictionary.")
+        judgement_json = _parse_model_json(output_text)
         judgement_json = _normalize_judgement(judgement_json)
     except Exception as e:
+        raw_judgement_path = judgement_path.with_suffix(".raw.txt")
+        with open(raw_judgement_path, "w", encoding="utf-8") as f:
+            f.write(output_text)
         raise ValueError(f"Failed to parse judgement output as JSON: {e}")
     with open(judgement_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(judgement_json, indent=4, ensure_ascii=False))
@@ -728,7 +1041,7 @@ def judge(version: int, DYNAMIC_CONFIG) -> None:
         f"{DYNAMIC_CONFIG.CUSTOMER}_P{DYNAMIC_CONFIG.SELECTED_PRODUCT_ID}_L{DYNAMIC_CONFIG.SELECTED_LEVEL_ID}_v{version}_prompt_resp.json"
     )
     with open(resp_file_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(_resp_dict, indent=4))
+        f.write(_dump_json_safe(_resp_dict, indent=4))
 
 
 def main(DYNAMIC_CONFIG) -> None:
@@ -747,12 +1060,12 @@ def main(DYNAMIC_CONFIG) -> None:
 
     # Iterative loop: Generate, judge, check pass; until version limit reached or pass criteria met
     VERSION_PASSED = False
-    current_version = 0
-    logger.info(f"[INFO] Starting iterative loop with version limit {DYNAMIC_CONFIG.VERSION_LIMIT}")
-    while current_version < DYNAMIC_CONFIG.VERSION_LIMIT:
-        if current_version >= DYNAMIC_CONFIG.VERSION_LIMIT:
-            logger.info("Version limit reached. Stopping without further edits.")
-            break
+    logger.info(
+        f"[INFO] Starting iterative loop with versions "
+        f"v{DYNAMIC_CONFIG.FIRST_VERSION}-"
+        f"v{DYNAMIC_CONFIG.FIRST_VERSION + DYNAMIC_CONFIG.VERSION_LIMIT - 1}"
+    )
+    for current_version in DYNAMIC_CONFIG.VERSION_IDS:
 
         logger.info(f"Starting iteration: v{current_version}")
 
@@ -776,8 +1089,6 @@ def main(DYNAMIC_CONFIG) -> None:
             logger.info(f"Pass criteria met at version {current_version}. Stopping iterations.")
             break
 
-        current_version += 1
-
     if not VERSION_PASSED:
         logger.info("[STAGE] 4: No version passed within selection limit. Selecting best version")
         compare_versions(DYNAMIC_CONFIG=DYNAMIC_CONFIG)
@@ -793,12 +1104,35 @@ def _create_output_dirs(DYNAMIC_CONFIG) -> None:
     DYNAMIC_CONFIG.PROMPT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Run the ad generation pipeline.")
+    parser.add_argument(
+        "--provider",
+        choices=["openai", "google"],
+        default=DYN_CONF.DEFAULT_PROVIDER,
+        help="Model provider to use. 'openai' uses GPT + gpt-image-1; 'google' uses Gemini + Nano Banana.",
+    )
+    parser.add_argument(
+        "--badge-size",
+        type=int,
+        default=2,
+        help="Number of participants to evaluate.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_args()
+    DYN_CONF.set_provider(args.provider)
 
     # Number of participants to evaluate:
-    badge_size = 2
+    badge_size = args.badge_size
 
     counter = 0
+    logger.info(
+        f"Starting pipeline with provider '{DYN_CONF.PROVIDER}' "
+        f"and data directory {DYN_CONF.DATA_DIR}"
+    )
 
     # Iterate over customers in PARTICIPANT_DATA_DF
     for i, participant_row in PARTICIPANT_DATA_DF.iterrows():

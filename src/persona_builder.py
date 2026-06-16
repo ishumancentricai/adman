@@ -8,14 +8,7 @@
 """
 
 import pandas as pd
-from config import (
-    CUSTOMER,
-    CUSTOMER_DIR,
-    PERSONA_DESCRIPTION_FILE,
-    CUSTOMER_DIR,
-    CLEANED_CUSTOMER_DATA_FILE,
-    PID_COLUMN,
-)
+from src.dynamic_config import DynamicConfig
 
 
 # === DESCRIPTION_COMPOSITION ===
@@ -179,14 +172,16 @@ DESCRIPTION_SNIPPETS = {
 }
 
 
-def build_persona_description() -> None:
+def build_persona_description(config: DynamicConfig | None = None) -> None:
+    config = config or DynamicConfig()
+
     # Input data file
-    cleaned_persona_data = CUSTOMER_DIR / CLEANED_CUSTOMER_DATA_FILE
+    cleaned_persona_data = config.CUSTOMER_DIR / config.CLEANED_CUSTOMER_DATA_FILE
     # Sep is tab for LimeSurvey export, comma for generic CSV
     df = pd.read_csv(cleaned_persona_data)
 
     # Select row for the specific customer
-    customer_row = df[df[PID_COLUMN] == CUSTOMER].iloc[0]
+    customer_row = df[df[config.PID_COLUMN] == config.CUSTOMER].iloc[0]
 
     keys = DESCRIPTION_COMPOSITION
     lines = []
@@ -201,7 +196,7 @@ def build_persona_description() -> None:
     description = "\n".join(lines)
     
     # Output data file
-    persona_description_file_path = CUSTOMER_DIR / PERSONA_DESCRIPTION_FILE
+    persona_description_file_path = config.CUSTOMER_DIR / config.PERSONA_DESCRIPTION_FILE
     with open(persona_description_file_path, "w", encoding="utf-8") as f:
         f.write(description)
 

@@ -1,8 +1,8 @@
 """Dynamic configuration helper.
 
-This module exposes :class:`DynamicConfig`, which mirrors the static constants
-in ``config.py`` but allows callers to swap the active customer, product, or
-level at runtime. Usage example:
+This module exposes :class:`DynamicConfig`, the canonical configuration object.
+Callers can swap the active customer, product, or level at runtime. Usage
+example:
 
 >>> cfg = DynamicConfig(customer="lee", product_id=2)
 >>> cfg.CUSTOMER
@@ -18,7 +18,10 @@ calling :meth:`update`, :meth:`set_customer`, :meth:`set_product`, or
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
+
+
+Provider = Literal["openai", "google"]
 
 
 class DynamicConfig:
@@ -28,10 +31,12 @@ class DynamicConfig:
     DEFAULT_CUSTOMER = "lee"
     DEFAULT_LEVEL_ID = 3
     DEFAULT_PRODUCT_ID = 4
+    DEFAULT_PROVIDER: Provider = "google"
 
-    # --- Static settings copied from config.py ---
+    # --- Shared settings ---
     PID_COLUMN = "PID"
     VERSION_LIMIT = 3
+    FIRST_VERSION = 1
 
     OPENAI_MODEL = "gpt-5"
     OPENAI_EFFORT = "high"
@@ -49,6 +54,17 @@ class DynamicConfig:
     IMAGE_FORMAT = "png"
     IMAGE_COMPRESSION = 100
     IMAGE_COUNT = 1
+
+    GOOGLE_TEXT_MODEL = "gemini-3.1-pro-preview" # "gemini-3.5-flash"
+    GOOGLE_IMAGE_MODEL = "gemini-3-pro-image-preview"
+    GOOGLE_IMAGE_ASPECT_RATIO = "2:3"
+    GOOGLE_IMAGE_SIZE = "1K"  # "512", "1K", "2K", "4K"
+    GOOGLE_THINKING_ENABLED = True
+    GOOGLE_THINKING_EFFORT = "low"  # "minimal", "low", "medium", "high"
+    GOOGLE_TIMEOUT_MS = 400_000
+    GOOGLE_RETRY_ATTEMPTS = 10
+    GOOGLE_RETRY_INITIAL_DELAY_SECONDS = 15
+    GOOGLE_RETRY_MAX_DELAY_SECONDS = 520
 
     MARKETING_OBJECTIVE = 'increase "purchase intention"'
 
@@ -84,7 +100,9 @@ class DynamicConfig:
     }
 
     BASE_PATH = Path(__file__).resolve().parent.parent
-    DATA_DIR = BASE_PATH / "data"
+    DATA_ROOT_DIR = BASE_PATH / "data"
+    DATA_DIR = DATA_ROOT_DIR / DEFAULT_PROVIDER
+    PARTICIPANT_DATA_FILE = DATA_ROOT_DIR / "participants.csv"
     PROMPT_TEMPLATES_DIR = BASE_PATH / "prompt_templates"
     REF_IMAGE_DIR = BASE_PATH / "reference_images"
 
@@ -114,10 +132,12 @@ class DynamicConfig:
         customer: Optional[str] = None,
         product_id: Optional[int] = None,
         level_id: Optional[int] = None,
+        provider: Provider | str | None = None,
     ) -> None:
         self._customer = customer or self.DEFAULT_CUSTOMER
         self._product_id = product_id or self.DEFAULT_PRODUCT_ID
         self._level_id = level_id or self.DEFAULT_LEVEL_ID
+        self._provider = self._normalize_provider(provider or self.DEFAULT_PROVIDER)
         self._sync_dynamic_fields()
 
     # --- Public mutators -------------------------------------------------
@@ -138,12 +158,17 @@ class DynamicConfig:
         self._level_id = level_id
         self._sync_dynamic_fields()
 
+    def set_provider(self, provider: Provider | str) -> None:
+        self._provider = self._normalize_provider(provider)
+        self._sync_dynamic_fields()
+
     def update(
         self,
         *,
         customer: Optional[str] = None,
         product_id: Optional[int] = None,
         level_id: Optional[int] = None,
+        provider: Provider | str | None = None,
     ) -> None:
         if customer is not None:
             if not customer:
@@ -154,6 +179,8 @@ class DynamicConfig:
             self._product_id = product_id
         if level_id is not None:
             self._level_id = level_id
+        if provider is not None:
+            self._provider = self._normalize_provider(provider)
         self._sync_dynamic_fields()
 
     # --- Helpers ---------------------------------------------------------
@@ -165,13 +192,25 @@ class DynamicConfig:
         ):
             raise ValueError(f"Unknown product_id: {product_id}")
 
+    def _normalize_provider(self, provider: Provider | str) -> Provider:
+        provider = provider.lower().strip()
+        if provider not in {"openai", "google"}:
+            raise ValueError("provider must be either 'openai' or 'google'")
+        return provider  # type: ignore[return-value]
+
     def _sync_dynamic_fields(self) -> None:
         # Primary selections
+        self.PROVIDER = self._provider
         self.CUSTOMER = self._customer
         self.SELECTED_PRODUCT_ID = self._product_id
         self.SELECTED_LEVEL_ID = self._level_id
+        self.VERSION_IDS = range(
+            self.FIRST_VERSION,
+            self.FIRST_VERSION + self.VERSION_LIMIT,
+        )
 
         # Paths derived from the active customer
+        self.DATA_DIR = self.DATA_ROOT_DIR / self.PROVIDER
         self.CUSTOMER_DIR = self.DATA_DIR / "customers" / self.CUSTOMER
         self.CUSTOMER_DATA_FILE = f"{self.CUSTOMER}.csv"
         self.CLEANED_CUSTOMER_DATA_FILE = f"{self.CUSTOMER}_cleaned.csv"

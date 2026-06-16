@@ -28,15 +28,26 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 # === CONFIGURATION ===
+REVIEWER_NAME = "LM" # <---------------------------- SET REVIEWER NAME HERE (used in output CSV filename)
 BASE_PATH = Path(__file__).parent.resolve()
 DATA_DIR = BASE_PATH / "data"
-CUSTOMERS_DIR = DATA_DIR / "customers"
-EVALUATION_CSV = DATA_DIR / "image_evaluation_paper_rev_1.csv"
+PROVIDER = "google"
+CUSTOMERS_DIR = DATA_DIR / PROVIDER / "customers"
+EVALUATION_CSV = DATA_DIR / f"{PROVIDER}_{REVIEWER_NAME}_image_evaluation.csv"
 
 # Product IDs to evaluate
 PRODUCT_IDS = [1, 2, 3, 4]
 # Level ID (typically L3)
 LEVEL_ID = 3
+
+# Keyboard shortcuts for manual evaluation.
+KEY_BINDINGS = {
+    "artifact": "1",
+    "text_only": "2",
+    "clean": "3",
+    "skip": "s",
+    "quit": "q",
+}
 
 # CSV columns
 CSV_COLUMNS = [
@@ -325,11 +336,36 @@ def display_image_and_get_evaluation(
         ax_quit = fig.add_axes([start_x + 4 * (btn_width + gap), btn_y, btn_width, btn_height])
 
         # Create buttons with colors
-        btn_artifact = Button(ax_artifact, 'Artifact (y)', color='#ffcccc', hovercolor='#ff9999')
-        btn_text_only = Button(ax_text_only, 'Text Only (t)', color='#ffddcc', hovercolor='#ffbb99')
-        btn_no_artifact = Button(ax_no_artifact, 'Clean (n)', color='#ccffcc', hovercolor='#99ff99')
-        btn_skip = Button(ax_skip, 'Skip (s)', color='#ffffcc', hovercolor='#ffff99')
-        btn_quit = Button(ax_quit, 'Quit (q)', color='#cccccc', hovercolor='#999999')
+        btn_artifact = Button(
+            ax_artifact,
+            f"Artifact ({KEY_BINDINGS['artifact']})",
+            color='#ffcccc',
+            hovercolor='#ff9999'
+        )
+        btn_text_only = Button(
+            ax_text_only,
+            f"Text Only ({KEY_BINDINGS['text_only']})",
+            color='#ffddcc',
+            hovercolor='#ffbb99'
+        )
+        btn_no_artifact = Button(
+            ax_no_artifact,
+            f"Clean ({KEY_BINDINGS['clean']})",
+            color='#ccffcc',
+            hovercolor='#99ff99'
+        )
+        btn_skip = Button(
+            ax_skip,
+            f"Skip ({KEY_BINDINGS['skip']})",
+            color='#ffffcc',
+            hovercolor='#ffff99'
+        )
+        btn_quit = Button(
+            ax_quit,
+            f"Quit ({KEY_BINDINGS['quit']})",
+            color='#cccccc',
+            hovercolor='#999999'
+        )
 
         # Connect buttons to callbacks
         btn_artifact.on_clicked(on_artifact)
@@ -340,15 +376,17 @@ def display_image_and_get_evaluation(
 
         # Also allow keyboard shortcuts
         def on_key(event):
-            if event.key in ['y', 'Y']:
+            key = event.key.lower() if event.key else ""
+
+            if key == KEY_BINDINGS["artifact"].lower():
                 on_artifact(event)
-            elif event.key in ['t', 'T']:
+            elif key == KEY_BINDINGS["text_only"].lower():
                 on_text_only(event)
-            elif event.key in ['n', 'N']:
+            elif key == KEY_BINDINGS["clean"].lower():
                 on_no_artifact(event)
-            elif event.key in ['s', 'S']:
+            elif key == KEY_BINDINGS["skip"].lower():
                 on_skip(event)
-            elif event.key in ['q', 'Q']:
+            elif key == KEY_BINDINGS["quit"].lower():
                 on_quit(event)
 
         fig.canvas.mpl_connect('key_press_event', on_key)

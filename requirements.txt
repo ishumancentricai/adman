@@ -2,6 +2,7 @@ pandas
 ipykernel
 jupyterlab
 openai
+google-genai
 Pillow
 requests
 python-dotenv
